@@ -1,0 +1,179 @@
+---
+title: Consumer
+description: Demo VPC, gateway endpoint, SSM endpoints, and probe EC2.
+---
+
+import { Steps, Aside } from "@astrojs/starlight/components";
+import Checklist from "@/components/Checklist.astro";
+import Diagram from "@/components/Diagram.astro";
+import consumerDiagram from "@/assets/diagrams/consumer.svg?raw";
+
+<Checklist
+  id="consumer"
+  items={[
+    "Lab VPC + private subnet in Sydney and Auckland",
+    "S3 gateway on each lab route table",
+    "Probe EC2 with SSM + S3 read role in each Region",
+    "SSM interface endpoints (no NAT)",
+  ]}
+/>
+
+## Overview
+
+`demo.sh up-consumer` builds a **dedicated private VPC** for the lab in that
+Region (Sydney `10.80.0.0/16`, Auckland `10.81.0.0/16`): one subnet, a route
+table, an S3 gateway endpoint, SSM interface endpoints, and a probe EC2 with no
+public IP. You do not bring your own VPC.
+
+Run it for **both** Sydney and Auckland before allowlist / prove.
+
+<Diagram
+  src={consumerDiagram}
+  alt="Per Region lab VPC with probe EC2, S3 gateway endpoint to the regional bucket, and SSM interface endpoints with no NAT"
+/>
+
+## Steps
+
+<Steps>
+
+1. Sydney:
+
+   ```bash frame="terminal"
+   export AWS_PROFILE=sandbox
+   ./scripts/demo.sh up-consumer syd
+   ```
+
+   ```text
+   up-consumer syd complete: vpc=vpc-0dff201fec9d04249 instance=i-01d741261020acb67 s3_vpce=vpce-0e5bfd92d3a7c0f29
+   ```
+
+2. Auckland:
+
+   ```bash frame="terminal"
+   export AWS_PROFILE=sandbox
+   ./scripts/demo.sh up-consumer akl
+   ```
+
+   ```text
+   up-consumer akl complete: vpc=vpc-0111bfaa8c2f98387 instance=i-07d5eaa611269b0fa s3_vpce=vpce-03e2d0531f4aa10bc
+   ```
+
+   In Auckland, `com.amazonaws.ap-southeast-6.ec2messages` did not exist. The
+   script skipped it and kept `ssm` + `ssmmessages`. Session Manager still
+   came Online.
+
+</Steps>
+
+<Aside type="note">
+  Private subnet on purpose: S3 goes through the gateway endpoint, SSM through
+  interface endpoints. Tear the VPCs down with <code>demo.sh down</code>.
+</Aside>
+
+## Verify
+
+Set once:
+
+```bash frame="terminal"
+SYD_IID="$(jq -r .consumers.syd.instance_id .lab-state.json)"
+AKL_IID="$(jq -r .consumers.akl.instance_id .lab-state.json)"
+```
+
+<Steps>
+
+1. Sydney SSM Online:
+
+   ```bash frame="terminal"
+   aws ssm describe-instance-information \
+     --filters "Key=InstanceIds,Values=${SYD_IID}" \
+     --region ap-southeast-2 \
+     --query 'InstanceInformationList[0].PingStatus' --output text
+   ```
+
+   ```text
+   Online
+   ```
+
+2. Auckland SSM Online:
+
+   ```bash frame="terminal"
+   aws ssm describe-instance-information \
+     --filters "Key=InstanceIds,Values=${AKL_IID}" \
+     --region ap-southeast-6 \
+     --query 'InstanceInformationList[0].PingStatus' --output text
+   ```
+
+   ```text
+   Online
+   ```
+
+3. Sydney consumer state (account redacted):
+
+   ```bash frame="terminal"
+   jq .consumers.syd .lab-state.json
+   ```
+
+   ```json
+   {
+     "region": "ap-southeast-2",
+     "bucket": "ps3a-artifacts-**ACCOUNT**-syd",
+     "vpc_id": "vpc-0dff201fec9d04249",
+     "subnet_id": "subnet-007f60aa9d044454a",
+     "route_table_id": "rtb-0e141dc056255b83d",
+     "created_vpc": true,
+     "s3_vpce_id": "vpce-0e5bfd92d3a7c0f29",
+     "created_s3_vpce": true,
+     "instance_id": "i-01d741261020acb67",
+     "instance_profile": "ps3a-syd-20260904200753-ec2",
+     "role_name": "ps3a-syd-20260904200753-ec2",
+     "sg_ec2": "sg-072f8eaf9fd335c66",
+     "sg_ssm": "sg-003f48f9fa34407ac",
+     "ssm_vpce_ids": [
+       "vpce-0ad31897be6e60d63",
+       "vpce-00c6119fff38d72b7",
+       "vpce-0d3cd6bb3d8f30a55"
+     ]
+   }
+   ```
+
+4. Auckland consumer state:
+
+   ```bash frame="terminal"
+   jq .consumers.akl .lab-state.json
+   ```
+
+   ```json
+   {
+     "region": "ap-southeast-6",
+     "bucket": "ps3a-artifacts-**ACCOUNT**-akl",
+     "vpc_id": "vpc-0111bfaa8c2f98387",
+     "subnet_id": "subnet-0631c1ed3fb798446",
+     "route_table_id": "rtb-0b18725c1284d2b4a",
+     "created_vpc": true,
+     "s3_vpce_id": "vpce-03e2d0531f4aa10bc",
+     "created_s3_vpce": true,
+     "instance_id": "i-07d5eaa611269b0fa",
+     "instance_profile": "ps3a-akl-20260904200753-ec2",
+     "role_name": "ps3a-akl-20260904200753-ec2",
+     "sg_ec2": "sg-00a4c7df8b354baf1",
+     "sg_ssm": "sg-023874117215e6a75",
+     "ssm_vpce_ids": [
+       "vpce-0dced485c6aff8b4f",
+       "vpce-0350e3a42883c4ed3"
+     ]
+   }
+   ```
+
+</Steps>
+
+| Check | Syd | Akl |
+| ----- | --- | --- |
+| VPC CIDR | `10.80.0.0/16` | `10.81.0.0/16` |
+| S3 gateway | `vpce-0e5bfd92d3a7c0f29` | `vpce-03e2d0531f4aa10bc` |
+| Instance | `i-01d741261020acb67` @ `10.80.1.16` | `i-07d5eaa611269b0fa` @ `10.81.1.19` |
+| Public IP | none | none |
+| SSM | `Online` | `Online` |
+| SSM interface VPCEs | 3 (`ssm`, `ssmmessages`, `ec2messages`) | 2 (`ssm`, `ssmmessages`; no `ec2messages` service) |
+
+## Next
+
+[Allowlist](/deploy-and-operate/allowlist/)

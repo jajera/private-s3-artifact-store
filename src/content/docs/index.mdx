@@ -1,0 +1,86 @@
+---
+title: Private S3 Artifact Store
+description: CLI lab for private S3 via regional gateway endpoints, with Sydney to Auckland replication.
+template: splash
+hero:
+  tagline: Publish a private object in Sydney, replicate it to Auckland, and curl it from a VPC in each Region through an S3 gateway endpoint.
+  actions:
+    - text: Get Started
+      link: /concepts/architecture/
+      icon: right-arrow
+      variant: primary
+---
+
+import { Card, CardGrid, Aside } from "@astrojs/starlight/components";
+import Tooltip from "@/components/Tooltip.astro";
+import Diagram from "@/components/Diagram.astro";
+import pulpVsS3 from "@/assets/diagrams/pulp-vs-s3.svg?raw";
+import labArchitecture from "@/assets/diagrams/lab-architecture.svg?raw";
+
+## Why this lab
+
+You want the same private object available in Sydney and Auckland. A
+[Pulp](https://pulpproject.org/)-style HTTP repo can do that too, but you end up
+running a server and owning the network path. Here S3 does the heavy lifting:
+publish once in Sydney, let <Tooltip term="crr" label="replication" /> copy to
+Auckland, and have each consumer VPC read its **local** bucket through a
+<Tooltip term="gateway-vpce" label="gateway VPC endpoint" />.
+
+Once the object has replicated, Auckland keeps reading Auckland if Sydney is
+down (and the other way around). That is not full multi-Region
+<Tooltip term="ha" label="HA" /> though. You still publish to Sydney,
+replication is async so <Tooltip term="rpo" label="RPO" /> is not zero, and
+anything in a failed Region is still down.
+
+<Diagram
+  src={pulpVsS3}
+  alt="Pulp-style HTTP repo versus this lab: both serve Sydney and Auckland consumers"
+/>
+
+## What you will do
+
+<CardGrid>
+  <Card title="Buckets + replication" icon="rocket">
+    Primary in <code>ap-southeast-2</code>, replica in <code>ap-southeast-6</code>,
+    filtered to a <code>demo/</code> prefix.
+  </Card>
+  <Card title="Consumer VPCs" icon="seti:folder">
+    An S3 <Tooltip term="gateway-vpce" label="gateway endpoint" /> per VPC,
+    locked with <Tooltip term="source-vpce" label="aws:SourceVpce" />.
+  </Card>
+  <Card title="Publish and prove" icon="approve-check">
+    Upload in Sydney, wait for the replica, curl from an SSM-managed EC2.
+  </Card>
+  <Card title="Tear down" icon="close">
+    Empty the versioned buckets and delete the lab with <code>demo.sh down</code>.
+  </Card>
+</CardGrid>
+
+<Diagram
+  src={labArchitecture}
+  alt="Lab architecture: Sydney primary, Auckland replica, regional gateway VPCEs"
+/>
+
+| Expectation | Notes |
+| ----------- | ----- |
+| Same object key | Different regional hostnames |
+| Cross-region reads | Via the replica, not cross-Region PrivateLink |
+| Cost while running | S3 + replication transfer + probe EC2 / SSM endpoints |
+
+<Aside type="caution">
+  This lab costs money until you tear it down. Destroy the consumers before you
+  empty the shared buckets if you created SSM interface endpoints.
+</Aside>
+
+## Read in this order
+
+1. [Architecture](/concepts/architecture/)
+2. [Lab findings: New Zealand](/concepts/lab-findings-nz/)
+3. [Gateway VPCE](/concepts/gateway-vpce/)
+4. [Replication Syd to Akl](/concepts/crr-syd-akl/)
+5. [Deploy and operate](/deploy-and-operate/prerequisites/)
+
+## References
+
+- [Gateway endpoints](https://docs.aws.amazon.com/vpc/latest/privatelink/gateway-endpoints.html)
+- [S3 replication](https://docs.aws.amazon.com/AmazonS3/latest/userguide/replication.html)

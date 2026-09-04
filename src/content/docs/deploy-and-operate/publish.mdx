@@ -1,0 +1,162 @@
+---
+title: Publish
+description: Upload a demo object to the primary bucket and wait for replication.
+---
+
+import { Steps, Aside } from "@astrojs/starlight/components";
+import Checklist from "@/components/Checklist.astro";
+import Diagram from "@/components/Diagram.astro";
+import publishDiagram from "@/assets/diagrams/publish.svg?raw";
+
+<Checklist
+  id="publish"
+  items={[
+    "Object under demo/ on the primary",
+    "Same key present on the replica",
+  ]}
+/>
+
+## Overview
+
+`demo.sh publish` uploads a file to the Sydney primary under `demo/` with
+`aws s3 cp`, then polls Auckland until the same key shows up (CRR).
+
+- **Default:** writes a small text file to a temp path, uploads it, deletes the
+  temp file. Key looks like `demo/see-<UTC-timestamp>.txt`.
+- **Optional argument:** `./scripts/demo.sh publish /path/to/file` uploads that
+  file instead (same `demo/see-<timestamp>.txt` key naming).
+
+Body is plain text (`Content-Type: text/plain`). The key lands in
+`.lab-state.json` as `demo_key` for prove.
+
+<Diagram
+  src={publishDiagram}
+  alt="Publisher uploads under demo/ to Sydney primary; CRR copies the same key to Auckland replica"
+/>
+
+## Steps
+
+<Steps>
+
+1. Publish (generated demo object):
+
+   ```bash frame="terminal"
+   export AWS_PROFILE=sandbox
+   ./scripts/demo.sh publish
+   ```
+
+   Lab run:
+
+   ```text
+   upload: /tmp/... to s3://ps3a-artifacts-**ACCOUNT**-syd/demo/see-20260904T205809Z.txt
+   waiting for CRR to ps3a-artifacts-**ACCOUNT**-akl ...
+   replicated: s3://ps3a-artifacts-**ACCOUNT**-akl/demo/see-20260904T205809Z.txt
+   ```
+
+</Steps>
+
+## Verify
+
+Set once:
+
+```bash frame="terminal"
+PRIMARY="$(jq -r .primary_bucket .lab-state.json)"
+REPLICA="$(jq -r .replica_bucket .lab-state.json)"
+KEY="$(jq -r .demo_key .lab-state.json)"
+```
+
+<Steps>
+
+1. Confirm state recorded the key:
+
+   ```bash frame="terminal"
+   jq '{demo_key, primary_bucket, replica_bucket}' .lab-state.json
+   ```
+
+   ```json
+   {
+     "demo_key": "demo/see-20260904T205809Z.txt",
+     "primary_bucket": "ps3a-artifacts-**ACCOUNT**-syd",
+     "replica_bucket": "ps3a-artifacts-**ACCOUNT**-akl"
+   }
+   ```
+
+2. Head the primary object:
+
+   ```bash frame="terminal"
+   aws s3api head-object --bucket "$PRIMARY" --key "$KEY" --region ap-southeast-2 \
+     --query '{ContentLength:ContentLength,ContentType:ContentType,ReplicationStatus:ReplicationStatus}' \
+     --output json
+   ```
+
+   ```json
+   {
+     "ContentLength": 144,
+     "ContentType": "text/plain",
+     "ReplicationStatus": "COMPLETED"
+   }
+   ```
+
+3. Read the primary body:
+
+   ```bash frame="terminal"
+   aws s3 cp "s3://${PRIMARY}/${KEY}" - --region ap-southeast-2
+   ```
+
+   ```text
+   private-s3-artifact-store demo object
+   created_utc=20260904T205809Z
+   primary_bucket=ps3a-artifacts-**ACCOUNT**-syd
+   primary_region=ap-southeast-2
+   ```
+
+4. Head the replica object:
+
+   ```bash frame="terminal"
+   aws s3api head-object --bucket "$REPLICA" --key "$KEY" --region ap-southeast-6 \
+     --query '{ContentLength:ContentLength,ContentType:ContentType,ReplicationStatus:ReplicationStatus}' \
+     --output json
+   ```
+
+   ```json
+   {
+     "ContentLength": 144,
+     "ContentType": "text/plain",
+     "ReplicationStatus": "REPLICA"
+   }
+   ```
+
+5. Read the replica body (same content):
+
+   ```bash frame="terminal"
+   aws s3 cp "s3://${REPLICA}/${KEY}" - --region ap-southeast-6
+   ```
+
+   ```text
+   private-s3-artifact-store demo object
+   created_utc=20260904T205809Z
+   primary_bucket=ps3a-artifacts-**ACCOUNT**-syd
+   primary_region=ap-southeast-2
+   ```
+
+6. Replication status query used by the short check:
+
+   ```bash frame="terminal"
+   aws s3api head-object --bucket "$REPLICA" --key "$KEY" \
+     --region ap-southeast-6 --query ReplicationStatus --output text
+   ```
+
+   ```text
+   REPLICA
+   ```
+
+</Steps>
+
+<Aside type="note">
+  Admin SSO can read both buckets (bypass). Consumer probes prove private
+  access through the gateway in the next step.
+</Aside>
+
+## Next
+
+[Prove](/deploy-and-operate/prove/)

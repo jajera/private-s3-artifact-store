@@ -1,0 +1,16 @@
+---
+title: Cost
+description: What bills while the lab runs.
+---
+
+| Resource | Charge |
+| -------- | ------ |
+| S3 storage (×2 with replica) | Per GB-month |
+| S3 requests | Per 1k |
+| Replication | PUTs + inter-Region data transfer |
+| S3 gateway VPCE | **$0** hourly |
+| SSM interface endpoints | Hourly per AZ |
+| Probe EC2 | Instance + EBS while running |
+
+Tear down when you are done. `demo.sh down` deletes the lab VPCs, gateways,
+SSM endpoints, and probe instances it created.

@@ -1,0 +1,158 @@
+---
+title: Prove
+description: Curl the regional object URL from the SSM-managed consumer EC2.
+---
+
+import { Steps, Aside } from "@astrojs/starlight/components";
+import Checklist from "@/components/Checklist.astro";
+import Diagram from "@/components/Diagram.astro";
+import proveDiagram from "@/assets/diagrams/prove.svg?raw";
+
+<Checklist
+  id="prove"
+  items={[
+    "Syd instance curls the primary URL successfully",
+    "Akl instance curls the replica URL successfully",
+    "Public curl from the workstation fails after allowlist",
+  ]}
+/>
+
+## Overview
+
+`demo.sh prove` uses **SSM Run Command** (no SSH). On the probe EC2 it curls
+the **regional** object URL
+(`https://<bucket>.s3.<region>.amazonaws.com/<demo_key>`), which goes through
+that Region's S3 gateway VPCE.
+
+Do this in **both** Regions. Keep instance, gateway, and bucket Region matched:
+a Sydney gateway cannot read the Auckland bucket hostname.
+
+<Diagram
+  src={proveDiagram}
+  alt="Laptop public curl denied; probe EC2 via SSM curls through the S3 gateway and succeeds"
+/>
+
+## Steps
+
+Set once:
+
+```bash frame="terminal"
+export AWS_PROFILE=sandbox
+PRIMARY="$(jq -r .primary_bucket .lab-state.json)"
+REPLICA="$(jq -r .replica_bucket .lab-state.json)"
+KEY="$(jq -r .demo_key .lab-state.json)"
+```
+
+<Steps>
+
+1. Sydney probe (primary via Syd gateway):
+
+   ```bash frame="terminal"
+   ./scripts/demo.sh prove syd
+   ```
+
+   ```json
+   {
+     "Status": "Success",
+     "Stdout": "private-s3-artifact-store demo object\ncreated_utc=20260904T205809Z\nprimary_bucket=ps3a-artifacts-**ACCOUNT**-syd\nprimary_region=ap-southeast-2\n\nEXIT:0\n",
+     "Stderr": ""
+   }
+   ```
+
+2. Auckland probe (replica via Akl gateway):
+
+   ```bash frame="terminal"
+   ./scripts/demo.sh prove akl
+   ```
+
+   ```json
+   {
+     "Status": "Success",
+     "Stdout": "private-s3-artifact-store demo object\ncreated_utc=20260904T205809Z\nprimary_bucket=ps3a-artifacts-**ACCOUNT**-syd\nprimary_region=ap-southeast-2\n\nEXIT:0\n",
+     "Stderr": ""
+   }
+   ```
+
+3. Laptop public curl (must fail after allowlist):
+
+   ```bash frame="terminal"
+   curl -sS -o /tmp/prove-curl.body -w 'http_code=%{http_code}\n' \
+     "https://${PRIMARY}.s3.ap-southeast-2.amazonaws.com/${KEY}"
+   head -c 200 /tmp/prove-curl.body; echo
+   ```
+
+   ```text
+   http_code=403
+   <?xml version="1.0" encoding="UTF-8"?>
+   <Error><Code>AccessDenied</Code><Message>Access Denied</Message>...</Error>
+   ```
+
+</Steps>
+
+## Verify
+
+<Steps>
+
+1. Confirm both consumers and the published key:
+
+   ```bash frame="terminal"
+   jq '{demo_key,
+     syd: {instance: .consumers.syd.instance_id, vpce: .consumers.syd.s3_vpce_id},
+     akl: {instance: .consumers.akl.instance_id, vpce: .consumers.akl.s3_vpce_id}}' .lab-state.json
+   ```
+
+   ```json
+   {
+     "demo_key": "demo/see-20260904T205809Z.txt",
+     "syd": {
+       "instance": "i-01d741261020acb67",
+       "vpce": "vpce-0e5bfd92d3a7c0f29"
+     },
+     "akl": {
+       "instance": "i-07d5eaa611269b0fa",
+       "vpce": "vpce-03e2d0531f4aa10bc"
+     }
+   }
+   ```
+
+2. Assert Syd Success + EXIT:0:
+
+   ```bash frame="terminal"
+   ./scripts/demo.sh prove syd \
+     | jq '{Status, has_body: (.Stdout | contains("private-s3-artifact-store")), exit_line: (.Stdout | capture("EXIT:(?<e>[0-9]+)") | .e)}'
+   ```
+
+   ```json
+   {
+     "Status": "Success",
+     "has_body": true,
+     "exit_line": "0"
+   }
+   ```
+
+3. Assert Akl Success + EXIT:0:
+
+   ```bash frame="terminal"
+   ./scripts/demo.sh prove akl \
+     | jq '{Status, has_body: (.Stdout | contains("private-s3-artifact-store")), exit_line: (.Stdout | capture("EXIT:(?<e>[0-9]+)") | .e)}'
+   ```
+
+   ```json
+   {
+     "Status": "Success",
+     "has_body": true,
+     "exit_line": "0"
+   }
+   ```
+
+</Steps>
+
+<Aside type="tip">
+  Signed admin CLI from your laptop still works (bypass ARN). The negative
+  check is <strong>unsigned</strong> HTTPS to the object URL, not
+  <code>aws s3 cp</code> with your SSO session.
+</Aside>
+
+## Next
+
+[Teardown](/deploy-and-operate/teardown/)

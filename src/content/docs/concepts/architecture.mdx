@@ -1,0 +1,47 @@
+---
+title: Architecture
+description: Two buckets, regional gateway endpoints, Sydney to Auckland replication.
+---
+
+import Tooltip from "@/components/Tooltip.astro";
+import Diagram from "@/components/Diagram.astro";
+import labArchitecture from "@/assets/diagrams/lab-architecture.svg?raw";
+
+## Overview
+
+One account holds two buckets. Consumers do not call S3 across Regions: each
+uses a <Tooltip term="gateway-vpce" label="gateway VPC endpoint" /> in its own
+Region and the **local** bucket hostname.
+<Tooltip term="crr" label="Replication" /> copies objects from Sydney to
+Auckland after you publish.
+
+<Diagram
+  src={labArchitecture}
+  alt="Lab architecture: Sydney primary, Auckland replica, regional gateway VPCEs"
+/>
+
+Same key, regional URL:
+
+```text
+https://<primary>.s3.ap-southeast-2.amazonaws.com/demo/...
+https://<replica>.s3.ap-southeast-6.amazonaws.com/demo/...
+```
+
+## Who owns what
+
+| Piece | Account | Region |
+| ----- | ------- | ------ |
+| Primary bucket (source) | Shared | `ap-southeast-2` |
+| Replica bucket | Shared | `ap-southeast-6` |
+| Syd gateway + probe EC2 | Same account in this lab | `ap-southeast-2` |
+| Akl gateway + probe EC2 | Same account in this lab | `ap-southeast-6` |
+
+Bucket policies deny access unless `aws:SourceVpce` matches an allowlisted
+endpoint. Publish, admin, and replication principals get a bypass.
+
+## Out of scope
+
+- CloudFront / public CDN
+- One global hostname (MRAP)
+- S3 **interface** endpoints for cross-Region reads
+- Package-manager `repodata` (plain objects only)
