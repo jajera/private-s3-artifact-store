@@ -1,0 +1,216 @@
+---
+title: Allowlist
+description: Lock bucket policies to consumer gateway VPCE IDs.
+---
+
+import { Steps, Aside } from "@astrojs/starlight/components";
+import Checklist from "@/components/Checklist.astro";
+import Diagram from "@/components/Diagram.astro";
+import allowlistDiagram from "@/assets/diagrams/allowlist.svg?raw";
+
+<Checklist
+  id="allowlist"
+  items={[
+    "Syd VPCE IDs on the primary bucket policy",
+    "Akl VPCE IDs on the replica bucket policy",
+    "Publish / admin / replication principals still bypass the deny",
+  ]}
+/>
+
+## Overview
+
+`demo.sh allowlist` rewrites **each** bucket policy from `.lab-state.json`.
+Same shape on primary and replica; only the gateway ID changes.
+
+**Who can hit the S3 replica (`…-akl`):**
+
+1. **Auckland S3 gateway VPCE** (`aws:SourceVpce` =
+   `vpce-03e2d0531f4aa10bc`): `GetObject` / `ListBucket` for the Akl probe
+2. **SSO admin role**: bypass `s3:*` (publish / ops from your laptop)
+3. **CRR role**: bypass `s3:*` (replication writer)
+
+Everyone else (internet, unsigned, wrong Region gateway) is denied. The Sydney
+gateway is **not** on the replica allowlist.
+
+Policy SIDs:
+
+- **DenyNonVpce**: deny `s3:*` unless `aws:SourceVpce` matches that bucket's
+  gateway (SSO admin and CRR exempt)
+- **AllowVpceRead**: allow `GetObject` / `ListBucket` via that VPCE
+- **AllowBypassPrincipals**: full `s3:*` for SSO admin + CRR
+- **AllowSSLRequestsOnly**: deny non-TLS
+
+If a Region has no consumer yet, that bucket only gets the bypass + TLS
+statements (no VPCE lock). Run `up-consumer` in **both** Regions first, then
+allowlist once.
+
+<Diagram
+  src={allowlistDiagram}
+  alt="Internet curl denied; probe EC2 via S3 gateway allowed; SSO admin and CRR role bypass the VPCE deny; both Syd and Akl gateways locked"
+/>
+
+## Steps
+
+<Steps>
+
+1. Apply policies from state (needs Syd and Akl `s3_vpce_id` values):
+
+   ```bash frame="terminal"
+   export AWS_PROFILE=sandbox
+   ./scripts/demo.sh allowlist
+   ```
+
+   Lab run (both consumers present):
+
+   ```text
+   allowlist applied (syd=["vpce-0e5bfd92d3a7c0f29"] akl=["vpce-03e2d0531f4aa10bc"])
+   ```
+
+</Steps>
+
+## Verify
+
+Set once for the checks below:
+
+```bash frame="terminal"
+PRIMARY="$(jq -r .primary_bucket .lab-state.json)"
+REPLICA="$(jq -r .replica_bucket .lab-state.json)"
+KEY=demo/allowlist-verify.txt
+INSTANCE="$(jq -r .consumers.syd.instance_id .lab-state.json)"
+```
+
+<Steps>
+
+1. Put a tiny object as admin (bypass) so curl / probe have a target:
+
+   ```bash frame="terminal"
+   echo "allowlist verify" | aws s3 cp - "s3://${PRIMARY}/${KEY}" --region ap-southeast-2
+   ```
+
+   ```text
+   upload: - to s3://ps3a-artifacts-**ACCOUNT**-syd/demo/allowlist-verify.txt
+   ```
+
+2. Primary policy SIDs (Sydney; VPCE lock present):
+
+   ```bash frame="terminal"
+   aws s3api get-bucket-policy --bucket "$PRIMARY" --region ap-southeast-2 \
+     --query Policy --output text | jq '.Statement[] | {Sid, Effect}'
+   ```
+
+   ```json
+   { "Sid": "AllowBypassPrincipals", "Effect": "Allow" }
+   { "Sid": "AllowSSLRequestsOnly", "Effect": "Deny" }
+   { "Sid": "DenyNonVpce", "Effect": "Deny" }
+   { "Sid": "AllowVpceRead", "Effect": "Allow" }
+   ```
+
+3. Primary `aws:SourceVpce` on the deny/allow statements:
+
+   ```bash frame="terminal"
+   aws s3api get-bucket-policy --bucket "$PRIMARY" --region ap-southeast-2 \
+     --query Policy --output text \
+     | jq -r '.Statement[] | select(.Sid=="DenyNonVpce")
+         | .Condition.StringNotEquals["aws:SourceVpce"][]'
+   ```
+
+   ```text
+   vpce-0e5bfd92d3a7c0f29
+   ```
+
+4. Replica policy SIDs (Auckland VPCE lock present):
+
+   ```bash frame="terminal"
+   aws s3api get-bucket-policy --bucket "$REPLICA" --region ap-southeast-6 \
+     --query Policy --output text | jq '.Statement[] | {Sid, Effect}'
+   ```
+
+   ```json
+   { "Sid": "AllowBypassPrincipals", "Effect": "Allow" }
+   { "Sid": "AllowSSLRequestsOnly", "Effect": "Deny" }
+   { "Sid": "DenyNonVpce", "Effect": "Deny" }
+   { "Sid": "AllowVpceRead", "Effect": "Allow" }
+   ```
+
+5. Replica `aws:SourceVpce`:
+
+   ```bash frame="terminal"
+   aws s3api get-bucket-policy --bucket "$REPLICA" --region ap-southeast-6 \
+     --query Policy --output text \
+     | jq -r '.Statement[] | select(.Sid=="DenyNonVpce")
+         | .Condition.StringNotEquals["aws:SourceVpce"][]'
+   ```
+
+   ```text
+   vpce-03e2d0531f4aa10bc
+   ```
+
+6. Anonymous curl (must fail):
+
+   ```bash frame="terminal"
+   curl -sS -o /tmp/allowlist-curl.body -w 'http_code=%{http_code}\n' \
+     "https://${PRIMARY}.s3.ap-southeast-2.amazonaws.com/${KEY}"
+   head -c 200 /tmp/allowlist-curl.body; echo
+   ```
+
+   ```text
+   http_code=403
+   <?xml version="1.0" encoding="UTF-8"?>
+   <Error><Code>AccessDenied</Code><Message>Access Denied</Message>...</Error>
+   ```
+
+7. Unsigned CLI head (must fail):
+
+   ```bash frame="terminal"
+   aws s3api head-object --bucket "$PRIMARY" --key "$KEY" \
+     --region ap-southeast-2 --no-sign-request
+   ```
+
+   ```text
+   aws: [ERROR]: An error occurred (403) when calling the HeadObject operation: Forbidden
+   ```
+
+8. Admin signed head (bypass ARN; must succeed):
+
+   ```bash frame="terminal"
+   aws s3api head-object --bucket "$PRIMARY" --key "$KEY" \
+     --region ap-southeast-2 --query ContentLength --output text
+   ```
+
+   ```text
+   17
+   ```
+
+9. Probe EC2 via Syd gateway + SSM (must succeed):
+
+   ```bash frame="terminal"
+   CMD_ID=$(aws ssm send-command \
+     --instance-ids "$INSTANCE" \
+     --document-name AWS-RunShellScript \
+     --parameters "commands=[\"aws s3api head-object --bucket $PRIMARY --key $KEY --region ap-southeast-2 --query ContentLength --output text\"]" \
+     --region ap-southeast-2 \
+     --query 'Command.CommandId' --output text)
+   aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$INSTANCE" \
+     --region ap-southeast-2 \
+     --query '{Status:Status,StdOut:StandardOutputContent}' --output json
+   ```
+
+   ```json
+   {
+     "Status": "Success",
+     "StdOut": "34\n"
+   }
+   ```
+
+</Steps>
+
+<Aside type="note">
+  Your laptop SSO session is the bypass principal, so signed CLI from the
+  laptop still works after allowlist. That is intentional for publish and
+  ops. The VPCE deny blocks anonymous traffic and non-bypass roles that are
+  not coming through a listed gateway.
+</Aside>
+
+## Next
+
+[Publish](/deploy-and-operate/publish/)

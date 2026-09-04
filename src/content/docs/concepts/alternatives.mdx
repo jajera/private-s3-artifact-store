@@ -1,0 +1,21 @@
+---
+title: Alternatives
+description: What this lab skips, and what to use instead.
+---
+
+## Skipped on purpose
+
+| Approach | Why not |
+| -------- | ------- |
+| Transit Gateway Syd↔Akl | Too much cost and plumbing for object GET |
+| Cross-Region PrivateLink to Syd S3 | Not available for `ap-southeast-6` as of Sep 2026; check again before relying on it ([lab findings](/concepts/lab-findings-nz/)) |
+| One Syd bucket + remote readers | Cross-island transfer on every download |
+| CloudFront / public bucket | Not private |
+| S3 interface VPCE instead of gateway | Extra cost for same-Region S3 |
+
+## Other options (not this lab)
+
+- HTTPS to a regional app (for example Pulp) when you need yum indexes, not
+  plain objects.
+- A second regional publisher if replication lag is a problem.
+- CI `createrepo_c` + sync if you later put static yum trees on these buckets.

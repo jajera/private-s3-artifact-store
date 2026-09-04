@@ -1,0 +1,147 @@
+---
+title: Teardown
+description: Destroy consumers, empty versioned buckets, delete shared resources.
+---
+
+import { Steps, Aside } from "@astrojs/starlight/components";
+import Checklist from "@/components/Checklist.astro";
+import Diagram from "@/components/Diagram.astro";
+import teardownDiagram from "@/assets/diagrams/teardown.svg?raw";
+
+<Checklist
+  id="teardown"
+  items={[
+    "Consumers and lab VPCs destroyed",
+    "All object versions deleted",
+    "Buckets and replication role removed",
+    ".lab-state.json cleared",
+  ]}
+/>
+
+## Overview
+
+`demo.sh down` tears the lab down in order, per Region, then the shared buckets:
+
+1. Terminate probe EC2 (wait until terminated)
+2. Delete SSM + S3 VPC endpoints (wait until gone)
+3. Delete security groups, instance profile / IAM role
+4. Disassociate route table, then delete subnet, route table, VPC
+5. Delete CRR config, empty both versioned buckets, delete buckets
+6. Delete CRR IAM role and remove `.lab-state.json`
+
+It asks for confirmation (`y`). EC2 calls always pass `--region` for that
+consumer, so a leftover `AWS_REGION` cannot send Auckland deletes to Sydney.
+
+<Diagram
+  src={teardownDiagram}
+  alt="Teardown order: consumer EC2 and VPC stack per Region, then empty and delete primary and replica buckets"
+/>
+
+## Steps
+
+<Steps>
+
+1. Destroy (type `y` when prompted):
+
+   ```bash frame="terminal"
+   export AWS_PROFILE=sandbox
+   ./scripts/demo.sh down
+   ```
+
+   Prompt + finish from this lab:
+
+   ```text
+   Destroy lab resources described in …/.lab-state.json? [y/N] y
+   tearing down consumer syd in ap-southeast-2
+   …
+   tearing down consumer akl in ap-southeast-6
+   …
+   emptying ps3a-artifacts-**ACCOUNT**-syd (ap-southeast-2)
+   emptying ps3a-artifacts-**ACCOUNT**-akl (ap-southeast-6)
+   down complete
+   ```
+
+</Steps>
+
+<Aside type="caution">
+  You keep getting billed until teardown finishes. Lab VPCs from
+  <code>up-consumer</code> go away with the rest of the stack.
+</Aside>
+
+## Verify
+
+IDs from the lab run that was destroyed (for the checks below):
+
+| Resource | ID |
+| -------- | -- |
+| Syd instance | `i-01d741261020acb67` |
+| Akl instance | `i-07d5eaa611269b0fa` |
+| Syd VPC | `vpc-0dff201fec9d04249` |
+| Akl VPC | `vpc-0111bfaa8c2f98387` |
+| Primary bucket | `ps3a-artifacts-**ACCOUNT**-syd` |
+| Replica bucket | `ps3a-artifacts-**ACCOUNT**-akl` |
+| CRR role | `ps3a-crr-20260904200753` |
+
+<Steps>
+
+1. State file gone:
+
+   ```bash frame="terminal"
+   test ! -f .lab-state.json && echo "state cleared"
+   ```
+
+   ```text
+   state cleared
+   ```
+
+2. Buckets gone:
+
+   ```bash frame="terminal"
+   aws s3api head-bucket --bucket ps3a-artifacts-**ACCOUNT**-syd --region ap-southeast-2
+   aws s3api head-bucket --bucket ps3a-artifacts-**ACCOUNT**-akl --region ap-southeast-6
+   ```
+
+   ```text
+   An error occurred (404) when calling the HeadBucket operation: Not Found
+   An error occurred (404) when calling the HeadBucket operation: Not Found
+   ```
+
+3. Instances terminated:
+
+   ```bash frame="terminal"
+   aws ec2 describe-instances --region ap-southeast-2 \
+     --instance-ids i-01d741261020acb67 \
+     --query 'Reservations[0].Instances[0].State.Name' --output text
+   aws ec2 describe-instances --region ap-southeast-6 \
+     --instance-ids i-07d5eaa611269b0fa \
+     --query 'Reservations[0].Instances[0].State.Name' --output text
+   ```
+
+   ```text
+   terminated
+   terminated
+   ```
+
+4. Lab VPCs gone:
+
+   ```bash frame="terminal"
+   aws ec2 describe-vpcs --region ap-southeast-2 --vpc-ids vpc-0dff201fec9d04249
+   aws ec2 describe-vpcs --region ap-southeast-6 --vpc-ids vpc-0111bfaa8c2f98387
+   ```
+
+   ```text
+   An error occurred (InvalidVpcID.NotFound) …
+   An error occurred (InvalidVpcID.NotFound) …
+   ```
+
+5. CRR role gone:
+
+   ```bash frame="terminal"
+   aws iam get-role --role-name ps3a-crr-20260904200753
+   ```
+
+   ```text
+   An error occurred (NoSuchEntity) when calling the GetRole operation: The role with name ps3a-crr-20260904200753 cannot be found.
+   ```
+
+</Steps>

@@ -1,0 +1,30 @@
+---
+title: Gateway VPC endpoint
+description: Why this lab uses S3 gateway endpoints.
+---
+
+import Tooltip from "@/components/Tooltip.astro";
+
+## Overview
+
+An S3 <Tooltip term="gateway-vpce" label="gateway VPC endpoint" /> is a
+route-table target, not an ENI. S3 traffic stays on the AWS network. The
+gateway itself has no hourly charge.
+
+## Gateway vs interface
+
+| | Gateway | Interface (PrivateLink) |
+| --- | --- | --- |
+| Cost | No hourly / GB processing for the gateway | Hourly per AZ + data processing |
+| Scope | Same-Region S3 only | Same-Region; cross-Region is a separate feature |
+| Plumbing | Associate route tables | Subnets, security groups, private DNS |
+
+This lab uses gateway endpoints plus
+<Tooltip term="source-vpce" label="aws:SourceVpce" /> on the bucket policy so
+only listed endpoints can read.
+
+## Same-Region only
+
+A Sydney gateway cannot reach an Auckland bucket. Auckland consumers need the
+**replica** bucket and an Auckland gateway. See
+[Lab findings: New Zealand](/concepts/lab-findings-nz/).

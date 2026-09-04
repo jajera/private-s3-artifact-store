@@ -1,0 +1,108 @@
+---
+title: Shared buckets
+description: Create primary and replica buckets, versioning, encryption, and replication.
+---
+
+import { Steps, Aside } from "@astrojs/starlight/components";
+import Checklist from "@/components/Checklist.astro";
+import Diagram from "@/components/Diagram.astro";
+import sharedBuckets from "@/assets/diagrams/shared-buckets.svg?raw";
+
+<Checklist
+  id="shared-buckets"
+  items={[
+    "Primary bucket in Sydney",
+    "Replica bucket in Auckland",
+    "Versioning and SSE-S3 on both",
+    "Replication role + rule for demo/",
+  ]}
+/>
+
+## Overview
+
+`demo.sh up-shared` creates the two buckets, turns on versioning and SSE-S3,
+wires Syd to Akl replication for `demo/`, and writes IDs to `.lab-state.json`
+(gitignored).
+
+<Diagram
+  src={sharedBuckets}
+  alt="Publisher writes to Sydney S3 primary; CRR copies demo/ to Auckland replica; both buckets have versioning and SSE-S3"
+/>
+
+## Steps
+
+<Steps>
+
+1. Create primary + replica:
+
+   ```bash frame="terminal"
+   export AWS_PROFILE=sandbox
+   aws sts get-caller-identity
+   ./scripts/demo.sh up-shared
+   ```
+
+   On success the script ends with:
+
+   ```text
+   up-shared complete: ps3a-artifacts-**ACCOUNT**-syd → ps3a-artifacts-**ACCOUNT**-akl
+   ```
+
+2. Check state:
+
+   ```bash frame="terminal"
+   ./scripts/demo.sh status
+   ```
+
+   Example (account id redacted):
+
+   ```json
+   {
+     "suffix": "20260904200753",
+     "name_prefix": "ps3a",
+     "primary_region": "ap-southeast-2",
+     "replica_region": "ap-southeast-6",
+     "demo_prefix": "demo/",
+     "consumers": {},
+     "primary_bucket": "ps3a-artifacts-**ACCOUNT**-syd",
+     "replica_bucket": "ps3a-artifacts-**ACCOUNT**-akl",
+     "crr_role_arn": "arn:aws:iam::**ACCOUNT**:role/ps3a-crr-20260904200753",
+     "bypass_principal_arn": "arn:aws:iam::**ACCOUNT**:role/aws-reserved/sso.amazonaws.com/ap-southeast-2/AWSReservedSSO_…"
+   }
+   ```
+
+</Steps>
+
+## Verify
+
+```bash frame="terminal"
+aws s3api head-bucket --bucket "$(jq -r .primary_bucket .lab-state.json)" --region ap-southeast-2
+aws s3api head-bucket --bucket "$(jq -r .replica_bucket .lab-state.json)" --region ap-southeast-6
+aws s3api get-bucket-versioning --bucket "$(jq -r .primary_bucket .lab-state.json)" --region ap-southeast-2
+aws s3api get-bucket-replication --bucket "$(jq -r .primary_bucket .lab-state.json)" --region ap-southeast-2
+```
+
+Expected shape (redacted):
+
+```text
+# head-bucket (each Region)
+BucketRegion: ap-southeast-2 | ap-southeast-6
+
+# versioning
+{ "Status": "Enabled" }
+
+# replication
+Rule ID demo-to-akl, Prefix demo/, Destination …-akl, Status Enabled
+```
+
+Both buckets also get SSE-S3 (`AES256`), public access block, and a bootstrap
+bucket policy that allows your SSO role plus the CRR role (VPCE lock comes in
+[allowlist](/deploy-and-operate/allowlist/)).
+
+<Aside type="note">
+  Policies start open enough for admin and replication. Tighten them with
+  [allowlist](/deploy-and-operate/allowlist/) after the consumer gateways exist.
+</Aside>
+
+## Next
+
+[Consumer](/deploy-and-operate/consumer/)

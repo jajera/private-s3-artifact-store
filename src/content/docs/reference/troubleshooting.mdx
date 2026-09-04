@@ -1,0 +1,16 @@
+---
+title: Troubleshooting
+description: Common failures and fixes.
+---
+
+| Symptom | Likely cause | Fix |
+| ------- | ------------ | --- |
+| `403` on curl from EC2 | VPCE not allowlisted, or wrong Region URL | Run `allowlist`; use the local bucket hostname |
+| `403` from laptop after allowlist | Expected | Prove from the EC2 only |
+| Replica never shows the object | Prefix not `demo/`, or role/policy | Check replication config + IAM |
+| SSM `PingStatus` not Online | Missing SSM VPCE / SG / instance profile | Recreate consumer; wait a minute or two |
+| Cross-Region PrivateLink to Akl | Not supported | Use replication + regional gateway |
+| Bucket delete fails | Versions left behind | `demo.sh down` empties versions first |
+| SSO token expired | Session timed out | `aws sso login --profile sandbox` |
+| `Invalid principal` on bucket policy | New IAM role not visible to S3 yet | `up-shared` retries; wait and re-run if needed |
+| Akl subnet create fails with Syd AZ | Sticky `AWS_REGION` in the shell | Script pins `--region`; unset `AWS_REGION` if you hit an old build |
